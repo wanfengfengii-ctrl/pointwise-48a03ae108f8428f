@@ -22,14 +22,22 @@ def encode_rows(categories: tuple[str, ...], rows: Iterable[_Observation]) -> Pa
     codes = []
     readings = []
     sources = []
+    starts = []
+    ends = []
     for row in rows:
         try:
             code = code_for[row.category]
         except KeyError as exc:
             raise PageDataError(f'category {row.category!r} is missing from the dictionary') from exc
+        start = getattr(row, 'start', None)
+        end = getattr(row, 'end', None)
+        if (start is None) != (end is None):
+            raise PageDataError('row interval must supply both bounds')
         codes.append(code)
         readings.append(row.reading)
         sources.append(row.source)
-    body = PageBody(tuple(codes), tuple(readings), tuple(sources))
+        starts.append(start)
+        ends.append(end)
+    body = PageBody(tuple(codes), tuple(readings), tuple(sources), tuple(starts), tuple(ends))
     validate_layout(body)
     return body

@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from audit.coverage import read_coverage
 from audit.statement import read
 from catalog.partitions import ensure_partition
 from catalog.snapshots import pin, release
@@ -74,6 +75,80 @@ def run_demo(database) -> None:
     }, sort_keys=True))
 
 
+def run_coverage_demo(database) -> None:
+    """Show interval coverage cases from the handoff contract on a fresh lake."""
+    sample = initialize_example(database)
+    partition = sample['partition']
+    for submission_id, rows in (
+        ('sample-a', [('A', 8, 0, 4)]),
+        ('sample-b', [('A', 8, 2, 6)]),
+        ('zero-c', [('C', 0, 0, 4)]),
+        ('missing-d', [('D', None, 2, 6)]),
+    ):
+        binding = submit(database, partition, submission_id, rows)
+        finish(database, binding.submission_id, binding.fingerprint)
+
+    def shape(statement):
+        return [
+            {
+                'category': segment.category,
+                'start': segment.start,
+                'end': segment.end,
+                'state': segment.state,
+                'litres': None if segment.litres is None else str(segment.litres),
+                'overlap': segment.overlap,
+                'sources': [f'{source.submission_id}#{source.row_number}' for source in segment.sources],
+            }
+            for segment in statement.segments
+        ]
+
+    same_rate = read_coverage(database, partition, 1, 5)
+    expected_same_rate = [
+        {'category': 'A', 'start': 1, 'end': 2, 'state': 'value', 'litres': '2', 'overlap': 'none', 'sources': ['sample-a#1']},
+        {'category': 'A', 'start': 2, 'end': 4, 'state': 'value', 'litres': '4', 'overlap': 'same-rate', 'sources': ['sample-a#1', 'sample-b#1']},
+        {'category': 'A', 'start': 4, 'end': 5, 'state': 'value', 'litres': '2', 'overlap': 'none', 'sources': ['sample-b#1']},
+        {'category': 'C', 'start': 1, 'end': 4, 'state': 'value', 'litres': '0', 'overlap': 'none', 'sources': ['zero-c#1']},
+        {'category': 'C', 'start': 4, 'end': 5, 'state': 'uncovered', 'litres': None, 'overlap': 'uncovered', 'sources': []},
+        {'category': 'D', 'start': 1, 'end': 2, 'state': 'uncovered', 'litres': None, 'overlap': 'uncovered', 'sources': []},
+        {'category': 'D', 'start': 2, 'end': 5, 'state': 'missing', 'litres': None, 'overlap': 'missing-only', 'sources': ['missing-d#1']},
+    ]
+    if same_rate.status != 'ok' or shape(same_rate) != expected_same_rate:
+        raise AssertionError('same-rate coverage differs from the handoff contract')
+    if same_rate.total_litres != 8 or same_rate.missing_length != 3 or same_rate.uncovered_length != 2:
+        raise AssertionError('coverage lengths or exact total differ from the handoff contract')
+
+    pin(database, partition, 'before-conflict')
+    conflict_binding = submit(database, partition, 'sample-conflict', [('A', 10, 2, 6)])
+    finish(database, conflict_binding.submission_id, conflict_binding.fingerprint)
+    conflict = read_coverage(database, partition, 1, 5)
+    if (conflict.status, conflict.reason) != ('rejected', 'conflicting-overlap'):
+        raise AssertionError('conflicting rate coverage was not rejected')
+    if conflict.segments or conflict.total_litres != 0 or conflict.conflict is None:
+        raise AssertionError('a rejected coverage query delivered partial results')
+
+    fixed_before = read_coverage(database, partition, 1, 5, 'before-conflict')
+    if fixed_before.status != 'ok' or fixed_before.total_litres != 8:
+        raise AssertionError('fixed snapshot does not retain the earlier coverage facts')
+    compact(database, partition, read(database, partition).page_ids)
+    fixed_after = read_coverage(database, partition, 1, 5, 'before-conflict')
+    current_after = read_coverage(database, partition, 1, 5)
+    if shape(fixed_after) != shape(fixed_before):
+        raise AssertionError('compaction changed the fixed coverage snapshot')
+    if current_after.status != 'rejected' or current_after.conflict is None:
+        raise AssertionError('compaction changed the conflicting current coverage verdict')
+
+    print(json.dumps({
+        'same_rate_total': str(same_rate.total_litres),
+        'same_rate_segments': shape(same_rate),
+        'conflict_status': conflict.status,
+        'conflict_rates': [None if rate is None else str(rate) for rate in conflict.conflict.rates],
+        'fixed_snapshot_total_before_compact': str(fixed_before.total_litres),
+        'fixed_snapshot_total_after_compact': str(fixed_after.total_litres),
+        'current_after_compact': current_after.status,
+    }, sort_keys=True))
+
+
 if __name__ == '__main__':
     with TemporaryDirectory(prefix='binting-demo-') as directory:
         run_demo(Path(directory) / 'observations.sqlite3')
+        run_coverage_demo(Path(directory) / 'coverage.sqlite3')
