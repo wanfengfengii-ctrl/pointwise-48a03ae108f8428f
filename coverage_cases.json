@@ -1,0 +1,41 @@
+{
+  "partition": "2026-11-21/binting",
+  "initial_categories": ["B", "A"],
+  "same_rate_overlap": {
+    "submissions": [
+      {"id": "sample-a", "rows": [["A", 8, 0, 4]]},
+      {"id": "sample-b", "rows": [["A", 8, 2, 6]]}
+    ],
+    "query": [1, 5],
+    "expected": {
+      "status": "ok",
+      "total_litres": "8",
+      "segments": [
+        {"category": "A", "start": 1, "end": 2, "state": "value", "litres": "2", "overlap": "none"},
+        {"category": "A", "start": 2, "end": 4, "state": "value", "litres": "4", "overlap": "same-rate"},
+        {"category": "A", "start": 4, "end": 5, "state": "value", "litres": "2", "overlap": "none"}
+      ]
+    }
+  },
+  "conflicting_overlap": {
+    "submissions": [
+      {"id": "sample-a", "rows": [["A", 8, 0, 4]]},
+      {"id": "sample-b", "rows": [["A", 10, 2, 6]]}
+    ],
+    "query": [1, 5],
+    "expected": {"status": "rejected", "reason": "conflicting-overlap"}
+  },
+  "zero_and_missing": {
+    "submissions": [
+      {"id": "zero-c", "rows": [["C", 0, 0, 4]]},
+      {"id": "missing-d", "rows": [["D", null, 2, 6]]}
+    ],
+    "query": [1, 5],
+    "expected": {
+      "status": "ok",
+      "total_litres": "0",
+      "missing_length": 3,
+      "uncovered_length": 2
+    }
+  }
+}

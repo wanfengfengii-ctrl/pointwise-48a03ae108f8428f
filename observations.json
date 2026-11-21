@@ -1,0 +1,8 @@
+{
+  "partition": "2026-11-21/binting",
+  "initial_categories": ["B", "A"],
+  "submissions": [
+    {"id": "station-a", "rows": [["A", 5], ["A", null]]},
+    {"id": "station-b", "rows": [["B", 7]]}
+  ]
+}
